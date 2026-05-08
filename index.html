@@ -250,8 +250,10 @@ function fmtDate(d) {
 }
 
 // ── LOAD ──────────────────────────────────────────────────────────────
+// Busca dados da API apenas quando as datas mudam
 async function loadData() {
   document.getElementById('loading-overlay').style.display = 'flex';
+  document.getElementById('content').style.display = 'none';
   try {
     const start = document.getElementById('f-start').value;
     const end   = document.getElementById('f-end').value;
@@ -269,55 +271,49 @@ async function loadData() {
     alert('Erro ao carregar dados: ' + e.message);
   } finally {
     document.getElementById('loading-overlay').style.display = 'none';
+    document.getElementById('content').style.display = 'block';
   }
 }
 
 function populateFilters() {
+  // Preserva seleção atual
+  const fc  = document.getElementById('f-client');
+  const fco = document.getElementById('f-collab');
+  const prevClient = fc.value;
+  const prevCollab = fco.value;
+
   const clients = [...new Set(allEntries.map(e => e.client_name).filter(Boolean))].sort();
   const collabs = [...new Set(allEntries.map(e => e.user_name).filter(Boolean))].sort();
 
-  const fc = document.getElementById('f-client');
-  const fco = document.getElementById('f-collab');
   fc.innerHTML  = '<option value="">Todos os clientes</option>' + clients.map(c => `<option value="${c}">${c}</option>`).join('');
   fco.innerHTML = '<option value="">Todos</option>' + collabs.map(c => `<option value="${c}">${c}</option>`).join('');
+
+  // Restaura seleção se ainda existir
+  if (prevClient && clients.includes(prevClient)) fc.value = prevClient;
+  if (prevCollab && collabs.includes(prevCollab)) fco.value = prevCollab;
 }
 
 // ── APPLY FILTERS ─────────────────────────────────────────────────────
-async function applyFilters() {
+// Filtra localmente — NÃO faz nova chamada à API
+function applyFilters() {
   const btn = document.getElementById('apply-btn');
-  btn.disabled = true;
+  if (btn) btn.disabled = true;
   document.getElementById('inline-spinner').style.display = 'block';
   document.getElementById('content').style.display = 'none';
 
-  const start  = document.getElementById('f-start').value;
-  const end    = document.getElementById('f-end').value;
   const client = document.getElementById('f-client').value;
   const collab = document.getElementById('f-collab').value;
 
-  try {
-    let url = '/api/timesheet?';
-    if (start) url += 'start_date=' + start + '&';
-    if (end)   url += 'end_date='   + end   + '&';
-    const r = await fetch(url);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const data = await r.json();
-    allEntries = Array.isArray(data) ? data : [];
-    populateFilters();
+  filteredEntries = allEntries.filter(e => {
+    if (client && e.client_name !== client) return false;
+    if (collab && e.user_name  !== collab)  return false;
+    return true;
+  });
 
-    filteredEntries = allEntries.filter(e => {
-      if (client && e.client_name !== client) return false;
-      if (collab && e.user_name  !== collab)  return false;
-      return true;
-    });
-
-    renderAll();
-    document.getElementById('content').style.display = 'block';
-  } catch(e) {
-    alert('Erro: ' + e.message);
-  } finally {
-    btn.disabled = false;
-    document.getElementById('inline-spinner').style.display = 'none';
-  }
+  renderAll();
+  document.getElementById('content').style.display = 'block';
+  document.getElementById('inline-spinner').style.display = 'none';
+  if (btn) btn.disabled = false;
 }
 
 // ── RENDER ────────────────────────────────────────────────────────────
