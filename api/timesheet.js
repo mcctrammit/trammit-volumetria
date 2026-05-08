@@ -12,56 +12,87 @@ export default async function handler(req, res) {
 
   try {
     let allTasks = [];
+    const pageSize = 100;
+    let page = 0;
+    let hasMore = true;
 
-    // Fetch open tasks
-    let url1 = 'https://runrun.it/api/v1.0/tasks?limit=200&sort_by=updated_at&sort_order=desc';
-    if (client_id) url1 += '&client_id=' + client_id;
+    // ✅ CORREÇÃO 1: Buscar TODAS as tarefas com tempo apontado (com ou sem closed)
+    // Não filtramos por is_closed na API, buscamos todas e filtramos depois por time_worked
+    while (hasMore) {
+      const offset = page * pageSize;
+      let url = `https://runrun.it/api/v1.0/tasks?limit=${pageSize}&offset=${offset}&sort_by=updated_at&sort_order=desc`;
+      
+      if (client_id) {
+        url += `&client_id=${client_id}`;
+      }
 
-    // Fetch closed tasks (where most time is logged)
-    let url2 = url1 + '&is_closed=true';
+      const response = await fetch(url, { headers });
+      
+      if (!response.ok) {
+        console.error(`API Error: ${response.status}`, await response.text());
+        break;
+      }
 
-    const [r1, r2] = await Promise.all([
-      fetch(url1, { headers }),
-      fetch(url2, { headers }),
-    ]);
+      const data = await response.json();
+      
+      // Normalizar resposta (pode vir em diferentes formatos)
+      const tasks = Array.isArray(data) ? data : (data.tasks || data.data || []);
+      
+      if (!tasks || tasks.length === 0) {
+        hasMore = false;
+        break;
+      }
 
-    const d1 = r1.ok ? await r1.json() : [];
-    const d2 = r2.ok ? await r2.json() : [];
+      allTasks = [...allTasks, ...tasks];
+      page++;
 
-    const open   = Array.isArray(d1) ? d1 : (d1.tasks || d1.data || []);
-    const closed = Array.isArray(d2) ? d2 : (d2.tasks || d2.data || []);
-    allTasks = [...open, ...closed];
+      // Parar se recebemos menos itens que o limite (última página)
+      if (tasks.length < pageSize) {
+        hasMore = false;
+      }
+    }
 
-    // Filter by date range using updated_at or close_date
+    // ✅ CORREÇÃO 2: Filtrar por tarefas que têm time_worked
+    // ✅ CORREÇÃO 3: Filtrar por data do apontamento (updated_at ou close_date, não created_at)
     let filtered = allTasks.filter(t => {
-      // Only include tasks with actual time worked
+      // Só incluir tarefas com tempo apontado
       if (!t.time_worked || t.time_worked === 0) return false;
 
-      // Date filtering
-      const dateStr = t.close_date || t.updated_at || t.created_at;
+      // Filtrar por intervalo de datas (usando updated_at como proxy para data do apontamento)
+      const dateStr = t.updated_at || t.close_date || t.created_at;
       if (!dateStr) return true;
+
       const date = new Date(dateStr);
       if (start_date && date < new Date(start_date)) return false;
-      if (end_date   && date > new Date(end_date + 'T23:59:59')) return false;
+      if (end_date && date > new Date(end_date + 'T23:59:59')) return false;
+
       return true;
     });
 
-    // Normalize into timesheet-like entries
+    // ✅ CORREÇÃO 4: Normalizar campos de usuário e cliente
+    // Alguns campos podem vir em diferentes chaves dependendo da estrutura
     const entries = filtered.map(t => ({
-      id:          t.id,
-      task_id:     t.id,
-      task_title:  t.title || t.name || 'Task #' + t.id,
-      user_name:   t.user_name || t.responsible_name || 'Desconhecido',
-      client_name: t.client_name || 'Sem cliente',
+      id:           t.id,
+      task_id:      t.id,
+      task_title:   t.title || t.name || `Task #${t.id}`,
+      user_name:    t.user_name || t.responsible_name || t.assigned_to || 'Desconhecido',
+      client_name:  t.client_name || 'Sem cliente',
       project_name: t.project_name || '',
-      time_worked:  t.time_worked || 0,          // seconds
-      amount:       t.time_worked || 0,          // alias
-      created_at:   t.close_date || t.updated_at || t.created_at,
+      time_worked:  t.time_worked || 0,  // segundos
+      amount:       t.time_worked || 0,  // alias para compatibilidade
+      seconds:      t.time_worked || 0,  // outro alias
+      created_at:   t.updated_at || t.close_date || t.created_at,
+      updated_at:   t.updated_at,
+      closed_at:    t.close_date,
       state:        t.state || '',
+      is_closed:    t.is_closed || false,
     }));
+
+    console.log(`[Timesheet API] Fetched ${allTasks.length} total tasks, filtered to ${entries.length} with time_worked`);
 
     return res.status(200).json(entries);
   } catch (err) {
+    console.error('[Timesheet API Error]', err.message);
     return res.status(500).json({ error: err.message });
   }
 }
