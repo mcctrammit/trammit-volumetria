@@ -13,18 +13,20 @@ export default async function handler(req, res) {
   try {
     let allTasks = [];
     const pageSize = 100;
-    let page = 0;
-    let hasMore = true;
+    let offset = 0;
+    let continueLooping = true;
+    let pageCount = 0;
 
-    // ✅ CORREÇÃO 1: Buscar TODAS as tarefas com tempo apontado (com ou sem closed)
-    // Não filtramos por is_closed na API, buscamos todas e filtramos depois por time_worked
-    while (hasMore) {
-      const offset = page * pageSize;
+    // ✅ CORREÇÃO CRÍTICA: Loop de paginação que busca TODAS as páginas
+    // Continua até receber menos itens que o pageSize (última página)
+    while (continueLooping) {
       let url = `https://runrun.it/api/v1.0/tasks?limit=${pageSize}&offset=${offset}&sort_by=updated_at&sort_order=desc`;
       
       if (client_id) {
         url += `&client_id=${client_id}`;
       }
+
+      console.log(`[Timesheet] Fetching page ${pageCount + 1}, offset: ${offset}`);
 
       const response = await fetch(url, { headers });
       
@@ -39,26 +41,33 @@ export default async function handler(req, res) {
       const tasks = Array.isArray(data) ? data : (data.tasks || data.data || []);
       
       if (!tasks || tasks.length === 0) {
-        hasMore = false;
+        console.log(`[Timesheet] No more tasks at offset ${offset}, stopping loop`);
+        continueLooping = false;
         break;
       }
 
+      console.log(`[Timesheet] Page ${pageCount + 1} returned ${tasks.length} tasks`);
       allTasks = [...allTasks, ...tasks];
-      page++;
+      pageCount++;
 
-      // Parar se recebemos menos itens que o limite (última página)
+      // ✅ CORREÇÃO: Parar somente quando recebemos MENOS itens que o limite
       if (tasks.length < pageSize) {
-        hasMore = false;
+        console.log(`[Timesheet] Last page detected (${tasks.length} < ${pageSize}), stopping loop`);
+        continueLooping = false;
+      } else {
+        // Continuar para próxima página
+        offset += pageSize;
       }
     }
 
-    // ✅ CORREÇÃO 2: Filtrar por tarefas que têm time_worked
-    // ✅ CORREÇÃO 3: Filtrar por data do apontamento (updated_at ou close_date, não created_at)
+    console.log(`[Timesheet] Paginação completa. Total de páginas: ${pageCount}, Total de tarefas: ${allTasks.length}`);
+
+    // ✅ FILTRO: Por tarefas com time_worked
     let filtered = allTasks.filter(t => {
       // Só incluir tarefas com tempo apontado
       if (!t.time_worked || t.time_worked === 0) return false;
 
-      // Filtrar por intervalo de datas (usando updated_at como proxy para data do apontamento)
+      // ✅ FILTRO DE DATA: Usar updated_at (data real do apontamento)
       const dateStr = t.updated_at || t.close_date || t.created_at;
       if (!dateStr) return true;
 
@@ -69,8 +78,9 @@ export default async function handler(req, res) {
       return true;
     });
 
-    // ✅ CORREÇÃO 4: Normalizar campos de usuário e cliente
-    // Alguns campos podem vir em diferentes chaves dependendo da estrutura
+    console.log(`[Timesheet] Filtradas ${filtered.length} tarefas com time_worked no período`);
+
+    // ✅ NORMALIZAR: Campos de usuário e cliente (trata variações)
     const entries = filtered.map(t => ({
       id:           t.id,
       task_id:      t.id,
@@ -88,7 +98,7 @@ export default async function handler(req, res) {
       is_closed:    t.is_closed || false,
     }));
 
-    console.log(`[Timesheet API] Fetched ${allTasks.length} total tasks, filtered to ${entries.length} with time_worked`);
+    console.log(`[Timesheet API] ✅ SUCESSO: ${pageCount} páginas = ${allTasks.length} tarefas totais = ${entries.length} com apontamento`);
 
     return res.status(200).json(entries);
   } catch (err) {
