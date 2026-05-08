@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/api/timesheet", "destination": "/api/timesheet.js" }
+  ]
+}
